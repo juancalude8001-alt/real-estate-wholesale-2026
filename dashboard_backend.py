@@ -3,6 +3,7 @@
 LOCAL DASHBOARD BACKEND API
 Runs in Tasklet sandbox for testing/demo
 Serves all endpoints needed by the real estate dashboard
+Updated: 2026-03-29 - Fix Railway deployment configuration
 """
 
 from fastapi import FastAPI, HTTPException
