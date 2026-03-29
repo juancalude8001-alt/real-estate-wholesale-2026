@@ -1,0 +1,744 @@
+import React, { useState, useEffect } from 'react';
+import { createRoot } from 'react-dom/client';
+import './styles.css';
+
+interface Deal {
+  id: string;
+  address: string;
+  city: string;
+  property_type: string;
+  opening_bid: number;
+  arv_estimate: number;
+  repair_estimate: number;
+  mao: number;
+  estimated_profit: number;
+  deal_score: number;
+  deal_tier: string;
+  discount_from_arv_percent: number;
+  time_remaining_days: number;
+  auction_date: string;
+  bedrooms: number;
+  bathrooms: number;
+  square_feet: number;
+  year_built: number;
+  photo_count: number;
+  owner_name?: string;
+  phone_number?: string;
+  seller_email?: string;
+  seller_motivation?: 'high' | 'medium' | 'low';
+  voice_status?: 'called' | 'interested' | 'callback' | 'not_interested';
+}
+
+interface Offer {
+  id: string;
+  deal_id: string;
+  tier: 'aggressive' | 'balanced' | 'conservative';
+  price: number;
+  acceptance_probability: number;
+  estimated_profit: number;
+  closing_days: number;
+  terms: string[];
+  created_at: string;
+  approved_by?: string;
+  approved_at?: string;
+  sent_at?: string;
+  status: 'draft' | 'approved' | 'sent' | 'accepted' | 'rejected';
+}
+
+interface Contract {
+  id: string;
+  deal_id: string;
+  offer_id: string;
+  type: 'purchase' | 'assignment';
+  generated_at: string;
+  document_url: string;
+  status: 'draft' | 'sent' | 'signed' | 'executed';
+  seller_signed_at?: string;
+}
+
+interface DealStatus {
+  deal_id: string;
+  stage: 'qualified' | 'voice_call' | 'offer_sent' | 'negotiating' | 'contract_sent' | 'signed' | 'closed';
+  substatus: string;
+  last_update: string;
+  notes: string;
+}
+
+// ============================================================
+// MAIN DASHBOARD COMPONENT
+// ============================================================
+function RealEstateDashboard() {
+  const [deals, setDeals] = useState<Deal[]>([]);
+  const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
+  const [selectedTab, setSelectedTab] = useState<'overview' | 'offers' | 'contract' | 'status' | 'voice'>('overview');
+  const [offers, setOffers] = useState<Map<string, Offer[]>>(new Map());
+  const [contracts, setContracts] = useState<Map<string, Contract[]>>(new Map());
+  const [dealStatus, setDealStatus] = useState<Map<string, DealStatus>>(new Map());
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<'all' | 'gold' | 'silver' | 'bronze'>('all');
+
+  useEffect(() => {
+    loadAllData();
+  }, []);
+
+  const loadAllData = async () => {
+    try {
+      const [dealsRes, offersRes, contractsRes, statusRes] = await Promise.all([
+        fetch('/api/deals'),
+        fetch('/api/offers/all'),
+        fetch('/api/contracts/all'),
+        fetch('/api/deals/status/all'),
+      ]);
+
+      if (dealsRes.ok) {
+        const dealsData = await dealsRes.json();
+        setDeals(Array.isArray(dealsData) ? dealsData : sampleDeals);
+      } else {
+        setDeals(sampleDeals);
+      }
+
+      if (offersRes.ok) {
+        const offersData = await offersRes.json();
+        const offersMap = new Map();
+        offersData.forEach((offer: Offer) => {
+          if (!offersMap.has(offer.deal_id)) {
+            offersMap.set(offer.deal_id, []);
+          }
+          offersMap.get(offer.deal_id).push(offer);
+        });
+        setOffers(offersMap);
+      }
+
+      if (contractsRes.ok) {
+        const contractsData = await contractsRes.json();
+        const contractsMap = new Map();
+        contractsData.forEach((contract: Contract) => {
+          if (!contractsMap.has(contract.deal_id)) {
+            contractsMap.set(contract.deal_id, []);
+          }
+          contractsMap.get(contract.deal_id).push(contract);
+        });
+        setContracts(contractsMap);
+      }
+
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        const statusMap = new Map();
+        statusData.forEach((status: DealStatus) => {
+          statusMap.set(status.deal_id, status);
+        });
+        setDealStatus(statusMap);
+      }
+    } catch (error) {
+      console.error('Error loading data:', error);
+      setDeals(sampleDeals);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGenerateOffers = async (deal: Deal) => {
+    try {
+      const response = await fetch('/offers/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deal_id: deal.id,
+          address: deal.address,
+          arv: deal.arv_estimate,
+          repairs: deal.repair_estimate,
+          mao: deal.mao,
+          seller_motivation: deal.seller_motivation || 'medium',
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const newOffers = data.offers;
+        const offersMap = new Map(offers);
+        offersMap.set(deal.id, newOffers);
+        setOffers(offersMap);
+        setSelectedTab('offers');
+      }
+    } catch (error) {
+      console.error('Error generating offers:', error);
+    }
+  };
+
+  const handleApproveOffer = async (offer: Offer) => {
+    try {
+      const response = await fetch('/offers/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offer_id: offer.id,
+          deal_id: offer.deal_id,
+          tier: offer.tier,
+          approved_by: 'user', // In production, would be actual user ID
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const offersMap = new Map(offers);
+        const dealOffers = offersMap.get(offer.deal_id) || [];
+        const updatedOffers = dealOffers.map((o) => (o.id === offer.id ? { ...o, status: 'approved', approved_at: new Date().toISOString() } : o));
+        offersMap.set(offer.deal_id, updatedOffers);
+        setOffers(offersMap);
+      }
+    } catch (error) {
+      console.error('Error approving offer:', error);
+    }
+  };
+
+  const handleSendOffer = async (offer: Offer, deal: Deal) => {
+    try {
+      const response = await fetch('/offers/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offer_id: offer.id,
+          deal_id: deal.id,
+          seller_email: deal.seller_email,
+          seller_phone: deal.phone_number,
+          price: offer.price,
+          closing_days: offer.closing_days,
+          terms: offer.terms,
+        }),
+      });
+
+      if (response.ok) {
+        const offersMap = new Map(offers);
+        const dealOffers = offersMap.get(offer.deal_id) || [];
+        const updatedOffers = dealOffers.map((o) => (o.id === offer.id ? { ...o, status: 'sent', sent_at: new Date().toISOString() } : o));
+        offersMap.set(offer.deal_id, updatedOffers);
+        setOffers(offersMap);
+
+        // Update deal status
+        const statusMap = new Map(dealStatus);
+        statusMap.set(deal.id, {
+          deal_id: deal.id,
+          stage: 'offer_sent',
+          substatus: `${offer.tier} offer sent via SMS + email`,
+          last_update: new Date().toISOString(),
+          notes: `Offer price: $${offer.price.toLocaleString()}`,
+        });
+        setDealStatus(statusMap);
+      }
+    } catch (error) {
+      console.error('Error sending offer:', error);
+    }
+  };
+
+  const handleGenerateContract = async (offer: Offer, deal: Deal) => {
+    try {
+      const response = await fetch('/contracts/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deal_id: deal.id,
+          offer_id: offer.id,
+          contract_type: 'purchase',
+          seller_name: deal.owner_name,
+          property_address: deal.address,
+          purchase_price: offer.price,
+          earnest_money: Math.round(offer.price * 0.05),
+          closing_date: new Date(Date.now() + offer.closing_days * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const contractsMap = new Map(contracts);
+        if (!contractsMap.has(deal.id)) {
+          contractsMap.set(deal.id, []);
+        }
+        contractsMap.get(deal.id)!.push(data.contract);
+        setContracts(contractsMap);
+        setSelectedTab('contract');
+      }
+    } catch (error) {
+      console.error('Error generating contract:', error);
+    }
+  };
+
+  const filteredDeals = deals.filter((deal) => {
+    if (filter === 'all') return true;
+    return deal.deal_tier === filter;
+  });
+
+  return (
+    <div className="dashboard-container">
+      <header className="dashboard-header">
+        <h1>🏠 Real Estate Wholesale Dashboard</h1>
+        <p>AI-Powered Deal Analysis + Voice Calling + Offers + Contracts</p>
+      </header>
+
+      {loading ? (
+        <div className="loading">Loading deals...</div>
+      ) : (
+        <div className="dashboard-layout">
+          {/* LEFT: DEAL LIST */}
+          <div className="deals-panel">
+            <div className="filter-controls">
+              <h3>Deals ({filteredDeals.length})</h3>
+              <div className="filter-buttons">
+                {['all', 'gold', 'silver', 'bronze'].map((f) => (
+                  <button key={f} className={`filter-btn ${filter === f ? 'active' : ''}`} onClick={() => setFilter(f as any)}>
+                    {f === 'all' ? '📊 All' : f === 'gold' ? '🥇 Gold' : f === 'silver' ? '🥈 Silver' : '🥉 Bronze'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="deals-list">
+              {filteredDeals.map((deal) => (
+                <div key={deal.id} className={`deal-card ${selectedDeal?.id === deal.id ? 'selected' : ''}`} onClick={() => setSelectedDeal(deal)}>
+                  <div className="deal-header">
+                    <span className={`tier-badge ${deal.deal_tier}`}>{deal.deal_tier.toUpperCase()}</span>
+                    <span className="deal-score">⭐ {deal.deal_score}</span>
+                  </div>
+
+                  <div className="deal-address">{deal.address}</div>
+                  <div className="deal-city">{deal.city}</div>
+
+                  <div className="deal-metrics">
+                    <div className="metric">
+                      <span className="label">Profit</span>
+                      <span className="value">${deal.estimated_profit.toLocaleString()}</span>
+                    </div>
+                    <div className="metric">
+                      <span className="label">Discount</span>
+                      <span className="value">{deal.discount_from_arv_percent}%</span>
+                    </div>
+                  </div>
+
+                  {/* Status Badge */}
+                  <div className="status-badge">
+                    {dealStatus.get(deal.id)?.stage === 'qualified' && '🟢 Qualified'}
+                    {dealStatus.get(deal.id)?.stage === 'voice_call' && '📞 Called'}
+                    {dealStatus.get(deal.id)?.stage === 'offer_sent' && '📬 Offer Sent'}
+                    {dealStatus.get(deal.id)?.stage === 'negotiating' && '💬 Negotiating'}
+                    {dealStatus.get(deal.id)?.stage === 'contract_sent' && '📄 Contract Sent'}
+                    {dealStatus.get(deal.id)?.stage === 'signed' && '✍️ Signed'}
+                    {dealStatus.get(deal.id)?.stage === 'closed' && '✅ Closed'}
+                    {!dealStatus.get(deal.id) && '🆕 New'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* RIGHT: DETAIL PANEL */}
+          {selectedDeal && (
+            <div className="detail-panel">
+              <div className="detail-header">
+                <h2>{selectedDeal.address}</h2>
+                <p>{selectedDeal.city}</p>
+              </div>
+
+              {/* TAB NAVIGATION */}
+              <div className="tab-navigation">
+                <button className={`tab-btn ${selectedTab === 'overview' ? 'active' : ''}`} onClick={() => setSelectedTab('overview')}>
+                  📊 Overview
+                </button>
+                <button className={`tab-btn ${selectedTab === 'voice' ? 'active' : ''}`} onClick={() => setSelectedTab('voice')}>
+                  📞 Voice
+                </button>
+                <button className={`tab-btn ${selectedTab === 'offers' ? 'active' : ''}`} onClick={() => setSelectedTab('offers')}>
+                  💰 Offers
+                </button>
+                <button className={`tab-btn ${selectedTab === 'contract' ? 'active' : ''}`} onClick={() => setSelectedTab('contract')}>
+                  📄 Contract
+                </button>
+                <button className={`tab-btn ${selectedTab === 'status' ? 'active' : ''}`} onClick={() => setSelectedTab('status')}>
+                  📈 Status
+                </button>
+              </div>
+
+              {/* TAB CONTENT */}
+              <div className="tab-content">
+                {/* OVERVIEW TAB */}
+                {selectedTab === 'overview' && (
+                  <div className="overview-section">
+                    <div className="metrics-grid">
+                      <div className="metric-card">
+                        <span className="label">ARV Estimate</span>
+                        <span className="value">${selectedDeal.arv_estimate.toLocaleString()}</span>
+                      </div>
+                      <div className="metric-card">
+                        <span className="label">Opening Bid</span>
+                        <span className="value">${selectedDeal.opening_bid.toLocaleString()}</span>
+                      </div>
+                      <div className="metric-card">
+                        <span className="label">Repairs</span>
+                        <span className="value">${selectedDeal.repair_estimate.toLocaleString()}</span>
+                      </div>
+                      <div className="metric-card">
+                        <span className="label">MAO</span>
+                        <span className="value">${selectedDeal.mao.toLocaleString()}</span>
+                      </div>
+                      <div className="metric-card highlight">
+                        <span className="label">Est. Profit</span>
+                        <span className="value">${selectedDeal.estimated_profit.toLocaleString()}</span>
+                      </div>
+                      <div className="metric-card">
+                        <span className="label">Deal Score</span>
+                        <span className="value">{selectedDeal.deal_score}/100</span>
+                      </div>
+                    </div>
+
+                    <div className="property-info">
+                      <h4>Property Details</h4>
+                      <div className="info-grid">
+                        <div className="info-item">
+                          <span className="label">Type:</span>
+                          <span>{selectedDeal.property_type}</span>
+                        </div>
+                        <div className="info-item">
+                          <span className="label">Beds/Baths:</span>
+                          <span>
+                            {selectedDeal.bedrooms}/{selectedDeal.bathrooms}
+                          </span>
+                        </div>
+                        <div className="info-item">
+                          <span className="label">Sq Ft:</span>
+                          <span>{selectedDeal.square_feet.toLocaleString()}</span>
+                        </div>
+                        <div className="info-item">
+                          <span className="label">Year Built:</span>
+                          <span>{selectedDeal.year_built}</span>
+                        </div>
+                        <div className="info-item">
+                          <span className="label">Auction:</span>
+                          <span>{selectedDeal.auction_date}</span>
+                        </div>
+                        <div className="info-item">
+                          <span className="label">Days Left:</span>
+                          <span>{selectedDeal.time_remaining_days}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="seller-info">
+                      <h4>Seller Info</h4>
+                      <div className="info-grid">
+                        <div className="info-item">
+                          <span className="label">Name:</span>
+                          <span>{selectedDeal.owner_name || 'Unknown'}</span>
+                        </div>
+                        <div className="info-item">
+                          <span className="label">Phone:</span>
+                          <span>{selectedDeal.phone_number || 'Unknown'}</span>
+                        </div>
+                        <div className="info-item">
+                          <span className="label">Email:</span>
+                          <span>{selectedDeal.seller_email || 'Unknown'}</span>
+                        </div>
+                        <div className="info-item">
+                          <span className="label">Motivation:</span>
+                          <span>
+                            {selectedDeal.seller_motivation === 'high' && '🔥 High'}
+                            {selectedDeal.seller_motivation === 'medium' && '⚡ Medium'}
+                            {selectedDeal.seller_motivation === 'low' && '❄️ Low'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* VOICE TAB */}
+                {selectedTab === 'voice' && (
+                  <div className="voice-section">
+                    <div className="voice-status">
+                      <h4>Voice Call Status</h4>
+                      <div className="status-indicator">
+                        {selectedDeal.voice_status === 'called' && '✅ Called'}
+                        {selectedDeal.voice_status === 'interested' && '🔥 Interested'}
+                        {selectedDeal.voice_status === 'callback' && '📅 Callback Needed'}
+                        {selectedDeal.voice_status === 'not_interested' && '❌ Not Interested'}
+                        {!selectedDeal.voice_status && '❌ Not Called Yet'}
+                      </div>
+                    </div>
+
+                    <button className="btn-primary" onClick={() => alert('Calling ' + selectedDeal.owner_name)}>
+                      📞 Call Owner Now
+                    </button>
+
+                    <div className="voice-history" style={{ marginTop: '2rem' }}>
+                      <h4>Call History</h4>
+                      <p style={{ color: '#999' }}>No calls yet. Click "Call Owner Now" to start.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* OFFERS TAB */}
+                {selectedTab === 'offers' && (
+                  <div className="offers-section">
+                    {!offers.get(selectedDeal.id) || offers.get(selectedDeal.id)!.length === 0 ? (
+                      <div className="no-offers">
+                        <p>No offers generated yet.</p>
+                        <button className="btn-primary" onClick={() => handleGenerateOffers(selectedDeal)}>
+                          💰 Generate 3 Offers
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="offers-grid">
+                        {offers.get(selectedDeal.id)!.map((offer) => (
+                          <div key={offer.id} className={`offer-card ${offer.tier}`}>
+                            <div className="offer-tier">
+                              {offer.tier === 'aggressive' && '🔴 AGGRESSIVE'}
+                              {offer.tier === 'balanced' && '🟡 BALANCED'}
+                              {offer.tier === 'conservative' && '🟢 CONSERVATIVE'}
+                            </div>
+
+                            <div className="offer-price">${offer.price.toLocaleString()}</div>
+
+                            <div className="offer-metrics">
+                              <div className="metric">
+                                <span>Acceptance</span>
+                                <span>{offer.acceptance_probability}%</span>
+                              </div>
+                              <div className="metric">
+                                <span>Your Profit</span>
+                                <span>${offer.estimated_profit.toLocaleString()}</span>
+                              </div>
+                              <div className="metric">
+                                <span>Close Days</span>
+                                <span>{offer.closing_days}</span>
+                              </div>
+                            </div>
+
+                            <div className="offer-terms">
+                              <strong>Terms:</strong>
+                              <ul>
+                                {offer.terms.map((term, i) => (
+                                  <li key={i}>✓ {term}</li>
+                                ))}
+                              </ul>
+                            </div>
+
+                            <div className="offer-status">Status: {offer.status}</div>
+
+                            <div className="offer-actions">
+                              {offer.status === 'draft' && (
+                                <button className="btn-secondary" onClick={() => handleApproveOffer(offer)}>
+                                  ✅ Approve Offer
+                                </button>
+                              )}
+                              {offer.status === 'approved' && (
+                                <button className="btn-primary" onClick={() => handleSendOffer(offer, selectedDeal)}>
+                                  📬 Send to Seller
+                                </button>
+                              )}
+                              {offer.status === 'sent' && (
+                                <button className="btn-secondary" onClick={() => handleGenerateContract(offer, selectedDeal)}>
+                                  📄 Generate Contract
+                                </button>
+                              )}
+                              {offer.status === 'accepted' && (
+                                <button className="btn-primary" onClick={() => handleGenerateContract(offer, selectedDeal)}>
+                                  📄 Generate Contract
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* CONTRACT TAB */}
+                {selectedTab === 'contract' && (
+                  <div className="contract-section">
+                    {!contracts.get(selectedDeal.id) || contracts.get(selectedDeal.id)!.length === 0 ? (
+                      <div className="no-contracts">
+                        <p>No contracts generated yet.</p>
+                        <p style={{ fontSize: '0.9rem', color: '#666' }}>Generate and send an offer first, then generate contract.</p>
+                      </div>
+                    ) : (
+                      <div className="contracts-list">
+                        {contracts.get(selectedDeal.id)!.map((contract) => (
+                          <div key={contract.id} className="contract-card">
+                            <div className="contract-header">
+                              <span className="contract-type">{contract.type.toUpperCase()} AGREEMENT</span>
+                              <span className="contract-status">{contract.status}</span>
+                            </div>
+
+                            <div className="contract-meta">
+                              <div className="meta-item">
+                                <span className="label">Generated:</span>
+                                <span>{new Date(contract.generated_at).toLocaleDateString()}</span>
+                              </div>
+                              {contract.seller_signed_at && (
+                                <div className="meta-item">
+                                  <span className="label">Seller Signed:</span>
+                                  <span>{new Date(contract.seller_signed_at).toLocaleDateString()}</span>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="contract-actions">
+                              <button className="btn-secondary">📥 Download PDF</button>
+                              <button className="btn-primary">📧 Send to Seller</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* STATUS TAB */}
+                {selectedTab === 'status' && (
+                  <div className="status-section">
+                    {dealStatus.get(selectedDeal.id) ? (
+                      <div className="status-detail">
+                        <h4>Current Stage</h4>
+                        <div className="stage-indicator">
+                          <span className="stage-name">{dealStatus.get(selectedDeal.id)!.stage.toUpperCase()}</span>
+                        </div>
+
+                        <h4 style={{ marginTop: '1.5rem' }}>Substatus</h4>
+                        <p>{dealStatus.get(selectedDeal.id)!.substatus}</p>
+
+                        <h4 style={{ marginTop: '1.5rem' }}>Last Update</h4>
+                        <p>{new Date(dealStatus.get(selectedDeal.id)!.last_update).toLocaleString()}</p>
+
+                        <h4 style={{ marginTop: '1.5rem' }}>Notes</h4>
+                        <p>{dealStatus.get(selectedDeal.id)!.notes}</p>
+
+                        {/* DEAL PIPELINE */}
+                        <div className="deal-pipeline" style={{ marginTop: '2rem' }}>
+                          <h4>Pipeline Progress</h4>
+                          <div className="pipeline-stages">
+                            <div className={`pipeline-stage ${dealStatus.get(selectedDeal.id)!.stage === 'qualified' || true ? 'active' : ''}`}>
+                              🟢 Qualified
+                            </div>
+                            <div className={`pipeline-stage ${dealStatus.get(selectedDeal.id)!.stage === 'voice_call' ? 'active' : ''}`}>
+                              📞 Called
+                            </div>
+                            <div className={`pipeline-stage ${dealStatus.get(selectedDeal.id)!.stage === 'offer_sent' ? 'active' : ''}`}>
+                              📬 Offer
+                            </div>
+                            <div className={`pipeline-stage ${dealStatus.get(selectedDeal.id)!.stage === 'negotiating' ? 'active' : ''}`}>
+                              💬 Negotiate
+                            </div>
+                            <div className={`pipeline-stage ${dealStatus.get(selectedDeal.id)!.stage === 'contract_sent' ? 'active' : ''}`}>
+                              📄 Contract
+                            </div>
+                            <div className={`pipeline-stage ${dealStatus.get(selectedDeal.id)!.stage === 'signed' ? 'active' : ''}`}>
+                              ✍️ Signed
+                            </div>
+                            <div className={`pipeline-stage ${dealStatus.get(selectedDeal.id)!.stage === 'closed' ? 'active' : ''}`}>
+                              ✅ Closed
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="no-status">
+                        <p>Status tracking will start after first voice call or offer.</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// SAMPLE DATA
+// ============================================================
+const sampleDeals: Deal[] = [
+  {
+    id: '1',
+    address: '4205 Lakewood Drive',
+    city: 'Dallas',
+    property_type: 'Single Family',
+    opening_bid: 195000,
+    arv_estimate: 275000,
+    repair_estimate: 35000,
+    mao: 158500,
+    estimated_profit: 48000,
+    deal_score: 92,
+    deal_tier: 'gold',
+    discount_from_arv_percent: 29,
+    time_remaining_days: 8,
+    auction_date: '2026-04-06',
+    bedrooms: 4,
+    bathrooms: 2,
+    square_feet: 2400,
+    year_built: 1998,
+    photo_count: 24,
+    owner_name: 'John Martinez',
+    phone_number: '214-555-0102',
+    seller_email: 'john.martinez@email.com',
+    seller_motivation: 'high',
+    voice_status: 'interested',
+  },
+  {
+    id: '2',
+    address: '8721 Maple Avenue',
+    city: 'Fort Worth',
+    property_type: 'Multi Family (4-Plex)',
+    opening_bid: 420000,
+    arv_estimate: 620000,
+    repair_estimate: 85000,
+    mao: 349000,
+    estimated_profit: 71500,
+    deal_score: 88,
+    deal_tier: 'gold',
+    discount_from_arv_percent: 32,
+    time_remaining_days: 12,
+    auction_date: '2026-04-10',
+    bedrooms: 8,
+    bathrooms: 4,
+    square_feet: 4800,
+    year_built: 2005,
+    photo_count: 31,
+    owner_name: 'Sarah Anderson',
+    phone_number: '817-555-0203',
+    seller_email: 'sarah.a@email.com',
+    seller_motivation: 'medium',
+    voice_status: 'called',
+  },
+  {
+    id: '3',
+    address: '3344 Oak Ridge Road',
+    city: 'Houston',
+    property_type: 'Single Family',
+    opening_bid: 165000,
+    arv_estimate: 240000,
+    repair_estimate: 28000,
+    mao: 140000,
+    estimated_profit: 35000,
+    deal_score: 75,
+    deal_tier: 'silver',
+    discount_from_arv_percent: 31,
+    time_remaining_days: 5,
+    auction_date: '2026-04-03',
+    bedrooms: 3,
+    bathrooms: 1.5,
+    square_feet: 1850,
+    year_built: 1995,
+    photo_count: 18,
+    owner_name: 'Michael Chen',
+    phone_number: '713-555-0304',
+    seller_email: 'mchen@email.com',
+    seller_motivation: 'high',
+  },
+];
+
+// ============================================================
+// MOUNT APP
+// ============================================================
+const root = createRoot(document.getElementById('root')!);
+root.render(<RealEstateDashboard />);

@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: real-estate-postgres
+    environment:
+      POSTGRES_USER: wholesale_user
+      POSTGRES_PASSWORD: secure_password_change_this
+      POSTGRES_DB: real_estate_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wholesale_user -d real_estate_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache (for Celery task queue)
+  redis:
+    image: redis:7-alpine
+    container_name: real-estate-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Python Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: real-estate-backend
+    environment:
+      DATABASE_URL: postgresql://wholesale_user:secure_password_change_this@postgres:5432/real_estate_db
+      REDIS_URL: redis://redis:6379
+      PORT: 8000
+      FLASK_ENV: development
+      LOG_LEVEL: DEBUG
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: uvicorn dashboard_backend:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Celery Worker (Task Scheduler)
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: real-estate-celery
+    environment:
+      DATABASE_URL: postgresql://wholesale_user:secure_password_change_this@postgres:5432/real_estate_db
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - .:/app
+    command: celery -A dashboard_backend worker --loglevel=info
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  default:
+    name: real-estate-network
