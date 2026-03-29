@@ -450,9 +450,8 @@ async def root():
         return {"status": "ok", "message": "Real Estate Dashboard API is running"}
 @app.get("/health")
 async def health():
-    """Health check"""
-    @app.get("/")async def root():    return {"status": "ok", "message": "Real Estate Dashboard API is running"}
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+        """Health check"""
+        return {"status": "ok", "timestamp": datetime.now().isoformat()}
 
 if __name__ == "__main__":
     import uvicorn
