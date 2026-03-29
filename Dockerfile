@@ -21,10 +21,6 @@ COPY vapi_voice_system.py .
 COPY approval_workflow_api.py .
 COPY vapi_backend_api.py .
 
-# Copy database files
-COPY real_estate.db .
-COPY call_outcomes.db .
-COPY deal_tracker.db .
 
 # Expose port
 EXPOSE 8000
